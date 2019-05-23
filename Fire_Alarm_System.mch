@@ -59,7 +59,7 @@ OPERATIONS
         panel_events_log := (person |-> ACTION_TURN_OFF) -> panel_events_log
     END
     
-    status_normal_normal(sensor) = 
+    system_statuses_normal(sensor) = 
     PRE
        system_state = STATE_ON &
        sensor : SENSOR &
