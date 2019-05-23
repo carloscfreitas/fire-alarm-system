@@ -12,14 +12,16 @@ SETS
     POWER_SUPPLIES = {AC_POWER, DC_POWER};
     PERSON;
     ACTION = {ACTION_TURN_ON, ACTION_TURN_OFF}
+    SENSOR = {SENSOR_ON, SENSOR_OFF}
 VARIABLES
-    system_state, system_status, power_supply, on_fire, panel_events_log
+    system_state, system_status, power_supply, on_fire, panel_events_log,sensors
 INVARIANT
     system_state : SYSTEM_STATES &
     system_status : SYSTEM_STATUSES &
     power_supply : POWER_SUPPLIES &
     on_fire : BOOL &
-    panel_events_log : seq(PERSON*ACTION)
+    panel_events_log : seq(PERSON*ACTION) &
+    sensors : SENSOR
 INITIALISATION
     system_state := STATE_OFF ||
     system_status := STATUS_ALARM ||
@@ -56,4 +58,18 @@ OPERATIONS
         power_supply := AC_POWER ||
         panel_events_log := (person |-> ACTION_TURN_OFF) -> panel_events_log
     END
+    
+    status_normal_normal(sensor) = 
+    PRE
+       system_state = STATE_ON &
+       sensor : SENSOR &
+       on_fire : FALSE
+    THEN
+        //Eu coloquei um sensor so, porque eu nao tinha certeza de quantos iriam ser.
+        IF sensor = SENSOR_ON THEN
+        BEGIN    
+        system_status := STATUS_NORMAL
+        END;
+    END;
+    
 END
