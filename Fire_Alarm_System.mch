@@ -3,37 +3,45 @@
  * Creation date: 18/05/19
  */
  
-// TODO Define sets and variables for input (smoke and heat detectors, manual call points, sprinklers) and output devices (sirens, bells, emergency lights, door holder relays)
+// Define sets and variables for output devices (sirens, bells, emergency lights, door holder relays)
 MACHINE
     Fire_Alarm_System
 SETS
-    SYSTEM_STATES = {STATE_ON, STATE_OFF, STATE_DEFECT};
-    SYSTEM_STATUSES = {STATUS_NORMAL, STATUS_PREALARM, STATUS_ALARM};
+    SYSTEMS = {ALARM_SYSTEM};
+    SYSTEM_STATES = {STATE_OFF, STATE_NORMAL, STATE_DEFECT, STATE_PREALARM, STATE_ALARM};
     POWER_SUPPLIES = {AC_POWER, DC_POWER};
     PERSON;
-    ACTION = {ACTION_TURN_ON, ACTION_TURN_OFF}
-    SENSOR = {SENSOR_ON, SENSOR_OFF}
+    ACTION = {ACTION_TURN_ON_SYS, ACTION_TURN_OFF_SYS, ACTION_TURN_ON_CMP, ACTION_TURN_OFF_CMP};
+    // Add states for when danger has been detected.
+    COMPONENT_STATUSES = {STATUS_ON, STATUS_OFF, STATUS_DEFECT};
+    COMPONENTS = {
+        // Smoke Detectors
+        CMP_SD_1, CMP_SD_2, CMP_SD_3, CMP_SD_4, CMP_SD_5,
+        // Manual Call Points
+        CMP_MCP_1, CMP_MCP_2, CMP_MCP_3, CMP_MCP_4, CMP_MCP_5,
+        // Sprinklers
+        CMP_SPKR_1, CMP_SPKR_2, CMP_SPKR_3, CMP_SPKR_4, CMP_SPKR_5
+    }
 VARIABLES
-    system_state, system_status, power_supply, on_fire, panel_events_log,sensors
+    system_state, power_supply, panel_events_log, components
 INVARIANT
     system_state : SYSTEM_STATES &
-    system_status : SYSTEM_STATUSES &
     power_supply : POWER_SUPPLIES &
-    on_fire : BOOL &
     panel_events_log : seq(PERSON*ACTION) &
-    sensors : SENSOR
+    components : COMPONENTS --> COMPONENT_STATUSES
 INITIALISATION
     system_state := STATE_OFF ||
-    system_status := STATUS_ALARM ||
     power_supply := AC_POWER ||
-    on_fire := FALSE ||
-    panel_events_log := []
+    panel_events_log := [] ||
+    components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & ss = STATUS_OFF}
 OPERATIONS
-    ans <-- control_panel_info =
+    // Create operations to simulate external inputs (set a room on fire, blackouts, damage and fix components).
+    
+    info <-- control_panel_info =
     PRE
-        ans : SYSTEM_STATES*(SYSTEM_STATUSES*POWER_SUPPLIES)
+        info :  SYSTEM_STATES*(POWER_SUPPLIES*POW(COMPONENTS*COMPONENT_STATUSES))
     THEN
-        ans := (system_state |-> (system_status |-> power_supply))
+        info := (system_state |-> (power_supply |-> components))
     END;
     
     turn_on_system(person) =
@@ -41,35 +49,47 @@ OPERATIONS
         system_state = STATE_OFF &
         person : PERSON
     THEN
-        // TODO Check for components failures or danger on start.
-        system_state := STATE_ON ||
-        system_status := STATUS_NORMAL ||
-        panel_events_log := (person |-> ACTION_TURN_ON) -> panel_events_log
+        // Check for danger on start.
+        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_ON} => ss = components(cc)) & (components(cc) = STATUS_OFF => ss = STATUS_ON)} ||
+        IF card(components |> {STATUS_DEFECT}) > 0
+        THEN system_state := STATE_DEFECT
+        ELSE system_state := STATE_NORMAL
+        END ||
+        panel_events_log := (person |-> ACTION_TURN_ON_SYS) -> panel_events_log
     END;
     
     turn_off_system(person) =
     PRE
-        system_state = STATE_ON &
+        system_state /: {STATE_OFF, STATE_DEFECT} &
         person : PERSON
     THEN
-        // TODO Reset whole system to default state.
+        // Reset whole system to default state.
+        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_OFF} => ss = components(cc)) & (components(cc) = STATUS_ON => ss = STATUS_OFF)} ||
         system_state := STATE_OFF ||
-        system_status := STATUS_ALARM ||
         power_supply := AC_POWER ||
-        panel_events_log := (person |-> ACTION_TURN_OFF) -> panel_events_log
-    END
-    
-    system_statuses_normal(sensor) = 
-    PRE
-       system_state = STATE_ON &
-       sensor : SENSOR &
-       on_fire : FALSE
-    THEN
-        //Eu coloquei um sensor so, porque eu nao tinha certeza de quantos iriam ser.
-        IF sensor = SENSOR_ON THEN
-        BEGIN    
-        system_status := STATUS_NORMAL
-        END;
+        panel_events_log := (person |-> ACTION_TURN_OFF_SYS) -> panel_events_log
     END;
+    
+    activate_component(person, component) =
+    PRE
+        person : PERSON &
+        component : COMPONENTS &
+        components(component) = STATUS_OFF &
+        system_state /= STATE_OFF
+    THEN
+        components := components <+ {component |-> STATUS_ON} ||
+        panel_events_log := (person |-> ACTION_TURN_ON_CMP) -> panel_events_log
+    END;
+    
+    inactivate_component(person, component) =
+    PRE
+        person : PERSON &
+        component : COMPONENTS &
+        components(component) = STATUS_ON &
+        system_state /= STATE_OFF
+    THEN
+        components := components <+ {component |-> STATUS_OFF} ||
+        panel_events_log := (person |-> ACTION_TURN_OFF_CMP) -> panel_events_log
+    END
     
 END
