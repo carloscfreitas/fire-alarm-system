@@ -11,9 +11,8 @@ SETS
     SYSTEM_STATES = {STATE_OFF, STATE_NORMAL, STATE_DEFECT, STATE_PREALARM, STATE_ALARM};
     POWER_SUPPLIES = {AC_POWER, DC_POWER};
     PERSONS = {PERSON_1, PERSON_2, PERSON_3};
-    ACTION = {ACTION_TURN_ON_SYS, ACTION_TURN_OFF_SYS, ACTION_TURN_ON_CMP, ACTION_TURN_OFF_CMP};
-    // Add states for when danger has been detected.
-    COMPONENT_STATUSES = {STATUS_ON, STATUS_OFF, STATUS_DEFECT};
+    ACTION = {ACTION_TURN_ON_SYS, ACTION_TURN_OFF_SYS, ACTION_TURN_ON_CMP, ACTION_TURN_OFF_CMP, ACTION_FIX_COMPONENT};
+    COMPONENT_STATUSES = {STATUS_ON, STATUS_OFF, STATUS_DEFECT, STATUS_PREALARM, STATUS_ALARM};
     COMPONENTS = {
         // Smoke Detectors
         CMP_SD_1, CMP_SD_2, CMP_SD_3, CMP_SD_4, CMP_SD_5,
@@ -22,6 +21,11 @@ SETS
         // Sprinklers
         CMP_SPKR_1, CMP_SPKR_2, CMP_SPKR_3, CMP_SPKR_4, CMP_SPKR_5
     }
+CONSTANTS
+    smoke_detectors
+PROPERTIES
+    smoke_detectors : POW(COMPONENTS) &
+    smoke_detectors = {CMP_SD_1, CMP_SD_2, CMP_SD_3, CMP_SD_4, CMP_SD_5}
 VARIABLES
     system_state, power_supply, panel_events_log, components, has_electricity
 INVARIANT
@@ -37,8 +41,6 @@ INITIALISATION
     components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & ss = STATUS_OFF} ||
     has_electricity := TRUE
 OPERATIONS
-    // Create operations to simulate external inputs (set a room on fire).
-    
     info <-- control_panel_info =
     PRE
         info : SYSTEM_STATES*(POWER_SUPPLIES*POW(COMPONENTS*COMPONENT_STATUSES))
@@ -52,7 +54,7 @@ OPERATIONS
         person : PERSONS
     THEN
         // Check for danger on start.
-        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_ON} => ss = components(cc)) & (components(cc) = STATUS_OFF => ss = STATUS_ON)} ||
+        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_ON} => ss = components(cc)) & (components(cc) /: {STATUS_DEFECT, STATUS_ON} => ss = STATUS_ON)} ||
         IF card(components |> {STATUS_DEFECT}) > 0
         THEN system_state := STATE_DEFECT
         ELSE system_state := STATE_NORMAL
@@ -70,7 +72,7 @@ OPERATIONS
         person : PERSONS
     THEN
         // Reset whole system to default state.
-        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_OFF} => ss = components(cc)) & (components(cc) = STATUS_ON => ss = STATUS_OFF)} ||
+        components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_OFF} => ss = components(cc)) & (components(cc) /: {STATUS_DEFECT, STATUS_OFF} => ss = STATUS_OFF)} ||
         system_state := STATE_OFF ||
         panel_events_log := (person |-> ACTION_TURN_OFF_SYS) -> panel_events_log
     END;
@@ -90,40 +92,45 @@ OPERATIONS
     PRE
         person : PERSONS &
         component : COMPONENTS &
-        components(component) = STATUS_ON &
+        components(component) /: {STATUS_OFF, STATUS_DEFECT} &
         system_state /= STATE_OFF
     THEN
         components := components <+ {component |-> STATUS_OFF} ||
         panel_events_log := (person |-> ACTION_TURN_OFF_CMP) -> panel_events_log
     END;
     
-    EXT_DAMAGE_COMPONENT(component) =
+    fix_component(person, component) =
     PRE
-        component : COMPONENTS &
-        components(component) /= STATUS_DEFECT
-    THEN
-        components := components <+ {component |-> STATUS_DEFECT} ||
-        IF system_state /= STATE_OFF
-        THEN system_state := STATE_DEFECT
-        END
-    END;
-    
-    EXT_FIX_COMPONENT(component) =
-    PRE
+        person : PERSONS &
         component : COMPONENTS &
         components(component) = STATUS_DEFECT
     THEN
         IF system_state /= STATE_OFF
         THEN
-            IF dom(components |> {STATUS_DEFECT}) = {component}
-            // Check for danger    
+            components := components <+ {component |-> STATUS_ON} ||
+            IF dom(components |> {STATUS_DEFECT}) = {component} & card(components |> {STATUS_PREALARM, STATUS_ALARM}) = 0
             THEN system_state := STATE_NORMAL
-            ELSE system_state := STATE_DEFECT
-            END ||
-            components := components <+ {component |-> STATUS_ON}
+            END
         ELSE
             components := components <+ {component |-> STATUS_OFF}
-        END        
+        END ||
+        panel_events_log := (person |-> ACTION_FIX_COMPONENT) -> panel_events_log
+    END;
+
+   /**
+    * External operations (controls the environment variables states).
+    */
+
+    EXT_COMPONENT_MALFUNCTION(component) =
+    PRE
+        system_state /= STATE_OFF &
+        component : COMPONENTS &
+        components(component) /= STATUS_DEFECT
+    THEN
+        components := components <+ {component |-> STATUS_DEFECT} ||
+        IF system_state = STATE_NORMAL
+        THEN system_state := STATE_DEFECT
+        END
     END;
     
     EXT_START_BLACKOUT =
@@ -131,7 +138,9 @@ OPERATIONS
         has_electricity = TRUE
     THEN
         has_electricity := FALSE ||
-        power_supply := DC_POWER
+        IF system_state /= STATE_OFF
+        THEN power_supply := DC_POWER
+        END
     END;
     
     EXT_STOP_BLACKOUT =
@@ -139,6 +148,37 @@ OPERATIONS
         has_electricity = FALSE
     THEN
         has_electricity := TRUE ||
-        power_supply := AC_POWER
-    END    
+        IF system_state /= STATE_OFF
+        THEN power_supply := AC_POWER
+        END
+    END;
+
+    EXT_DETECT_SMOKE(component) =
+    PRE
+        system_state /= STATE_OFF &
+        component : smoke_detectors &
+        components(component) = STATUS_ON
+    THEN
+        components := components <+ {component |-> STATUS_PREALARM} ||
+        IF system_state : {STATE_NORMAL, STATE_DEFECT}
+        THEN
+            system_state := STATE_PREALARM
+        END
+    END;
+
+    EXT_CLEAR_SMOKE_DETECTION(component) =
+    PRE
+        system_state /= STATE_OFF &
+        component : smoke_detectors &
+        components(component) = STATUS_PREALARM
+    THEN
+        components := components <+ {component |-> STATUS_ON} ||
+        IF dom(components |> {STATUS_PREALARM}) = {component} & card(components |> {STATUS_ALARM}) = 0
+        THEN
+            IF card(components |> {STATUS_DEFECT}) > 0
+            THEN system_state := STATE_DEFECT
+            ELSE system_state := STATE_NORMAL
+            END
+        END
+    END
 END
