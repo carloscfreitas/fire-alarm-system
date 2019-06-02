@@ -21,7 +21,8 @@ SETS
         CMP_SPKR_1, CMP_SPKR_2, CMP_SPKR_3, CMP_SPKR_4, CMP_SPKR_5
     };
     ROOMS = {ROOM_1, ROOM_2, ROOM_3, ROOM_4, ROOM_5};
-    ROOM_STATES = {SECURE, ALERT, DANGER}
+    ROOM_STATES = {SECURE, ALERT, DANGER};
+    EMERGENCY_LIGHTS_STATES = {LIGHTS_OFF, BLINK_YELLOW, BLINK_RED}
 CONSTANTS
     SMOKE_DETECTORS, SPRINKLERS, MANUAL_CALL_POINTS, ROOMS_COMPONENTS
 PROPERTIES
@@ -40,7 +41,7 @@ PROPERTIES
         ROOM_5 |-> {CMP_SD_5, CMP_MCP_5, CMP_SPKR_5}
     }
 VARIABLES
-    system_state, power_supply, panel_events_log, components, has_electricity, rooms
+    system_state, power_supply, panel_events_log, components, has_electricity, rooms, emergency_lights
 INVARIANT
     system_state : SYSTEM_STATES &
     power_supply : POWER_SUPPLIES &
@@ -48,6 +49,7 @@ INVARIANT
     components : COMPONENTS --> COMPONENT_STATUSES &
     has_electricity : BOOL &
     rooms : ROOMS --> ROOM_STATES &
+    emergency_lights : EMERGENCY_LIGHTS_STATES &
     (system_state /= STATE_OFF & has_electricity = TRUE => power_supply = AC_POWER) &
     (system_state /= STATE_OFF & has_electricity = FALSE => power_supply = DC_POWER) &
     (system_state = STATE_OFF => card(components |>> {STATUS_OFF, STATUS_DEFECT}) = 0) &
@@ -60,13 +62,14 @@ INITIALISATION
     panel_events_log := [] ||
     components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & ss = STATUS_OFF} ||
     has_electricity := TRUE ||
-    rooms := {rr, ss | rr : ROOMS & ss : ROOM_STATES & ss = SECURE}
+    rooms := {rr, ss | rr : ROOMS & ss : ROOM_STATES & ss = SECURE} ||
+    emergency_lights := LIGHTS_OFF
 OPERATIONS
     info <-- control_panel_info =
     PRE
-        info : SYSTEM_STATES*(POWER_SUPPLIES*POW(COMPONENTS*COMPONENT_STATUSES))
+        info : SYSTEM_STATES*(EMERGENCY_LIGHTS_STATES*(POWER_SUPPLIES*POW(COMPONENTS*COMPONENT_STATUSES)))
     THEN
-        info := (system_state |-> (power_supply |-> components))
+        info := (system_state |-> (emergency_lights |-> (power_supply |-> components)))
     END;
     
     turn_on_system(person) =
@@ -83,15 +86,20 @@ OPERATIONS
             (! rr . (rr : ROOMS & cc : ROOMS_COMPONENTS(rr) /\ (SMOKE_DETECTORS \/ SPRINKLERS) & rr : dom(rooms |> {DANGER}) => ss = STATUS_ALARM))
         } ||
         IF (# (rr, cc) . (rr : ROOMS & rr : dom(rooms |> {DANGER}) & cc : ROOMS_COMPONENTS(rr) - MANUAL_CALL_POINTS & components(cc) /= STATUS_DEFECT))
-        THEN system_state := STATE_ALARM
+        THEN 
+            system_state := STATE_ALARM ||
+            emergency_lights := BLINK_RED
         ELSE
             IF (# (rr, cc) . (rr : ROOMS & rr : dom(rooms |> {ALERT}) & cc : ROOMS_COMPONENTS(rr) - MANUAL_CALL_POINTS & components(cc) /= STATUS_DEFECT))
-            THEN system_state := STATE_PREALARM
+            THEN 
+                system_state := STATE_PREALARM ||
+                emergency_lights := BLINK_YELLOW
             ELSE
                 IF card(components |> {STATUS_DEFECT}) > 0
                 THEN system_state := STATE_DEFECT
                 ELSE system_state := STATE_NORMAL
-                END                        
+                END ||
+                emergency_lights := LIGHTS_OFF
             END
         END ||
         IF has_electricity = TRUE
@@ -108,6 +116,7 @@ OPERATIONS
     THEN
         components := {cc, ss | cc : COMPONENTS & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_DEFECT, STATUS_OFF} => ss = components(cc)) & (components(cc) /: {STATUS_DEFECT, STATUS_OFF} => ss = STATUS_OFF)} ||
         system_state := STATE_OFF ||
+        emergency_lights := LIGHTS_OFF ||
         panel_events_log := (person |-> ACTION_TURN_OFF_SYS) -> panel_events_log
     END;
     
@@ -121,15 +130,17 @@ OPERATIONS
         IF (# rr . (rr : ROOMS & rr : dom(rooms |> {DANGER}) & component : ROOMS_COMPONENTS(rr) - MANUAL_CALL_POINTS))
         THEN
             components := components <+ {component |-> STATUS_ALARM} ||
-            system_state := STATE_ALARM
+            system_state := STATE_ALARM ||
+            emergency_lights := BLINK_RED
         ELSE
             IF (# rr . (rr : ROOMS & rr : dom(rooms |> {ALERT}) & component : ROOMS_COMPONENTS(rr) /\ SMOKE_DETECTORS))
             THEN
                 components := components <+ {component |-> STATUS_PREALARM} ||
-                system_state := STATE_PREALARM
+                system_state := STATE_PREALARM ||
+                emergency_lights := BLINK_YELLOW
             ELSE
                 components := components <+ {component |-> STATUS_ON} ||
-                IF dom(components |> {STATUS_DEFECT}) = {component} & card(components |> {STATUS_PREALARM, STATUS_ALARM}) = 0
+                IF card(components |> {STATUS_DEFECT, STATUS_PREALARM, STATUS_ALARM}) = 0
                 THEN system_state := STATE_NORMAL
                 END
             END
@@ -240,7 +251,8 @@ OPERATIONS
                 components := components <+ {cc, ss | cc : ROOMS_COMPONENTS(room) /\ SMOKE_DETECTORS & ss : COMPONENT_STATUSES & ss = STATUS_PREALARM} ||
                 IF system_state : {STATE_NORMAL, STATE_DEFECT}
                 THEN
-                    system_state := STATE_PREALARM
+                    system_state := STATE_PREALARM ||
+                    emergency_lights := BLINK_YELLOW
                 END
             END
         END ||
@@ -263,7 +275,8 @@ OPERATIONS
                 IF card(components |> {STATUS_DEFECT}) > 0
                 THEN system_state := STATE_DEFECT
                 ELSE system_state := STATE_NORMAL
-                END
+                END ||
+                emergency_lights := LIGHTS_OFF
             END
         END ||
         rooms(room) := SECURE
@@ -281,7 +294,8 @@ OPERATIONS
                 components := components <+ {cc, ss | cc : ROOMS_COMPONENTS(room) /\ (SMOKE_DETECTORS \/ SPRINKLERS) & ss : COMPONENT_STATUSES & (components(cc) : {STATUS_ON, STATUS_PREALARM} => ss = STATUS_ALARM) & (components(cc) /: {STATUS_ON, STATUS_PREALARM} => ss = components(cc))} ||
                 IF system_state : {STATE_NORMAL, STATE_DEFECT, STATE_PREALARM}
                 THEN
-                    system_state := STATE_ALARM
+                    system_state := STATE_ALARM ||
+                    emergency_lights := BLINK_RED
                 END
             END
         END ||
@@ -306,8 +320,11 @@ OPERATIONS
                     IF card(components |> {STATUS_DEFECT}) > 0
                     THEN system_state := STATE_DEFECT
                     ELSE system_state := STATE_NORMAL
-                    END
-                ELSE system_state := STATE_PREALARM
+                    END ||
+                    emergency_lights := LIGHTS_OFF
+                ELSE 
+                    system_state := STATE_PREALARM ||
+                    emergency_lights := BLINK_YELLOW
                 END
             END
         END ||
