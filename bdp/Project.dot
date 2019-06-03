@@ -1,0 +1,4 @@
+digraph {
+Fire_Alarm_System [ label=" Fire_Alarm_System " shape= box ]
+
+}
